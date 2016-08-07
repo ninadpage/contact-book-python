@@ -490,16 +490,35 @@ class ContactBookDB(object):
         every time a character is entered by the user, show the user list of matching full names which
         is updated instantly, and when the user picks one, use the id to fetch full details of the person.
 
-        Example: Assume you have persons with following full names:
-        1: Abcd Hijk
-        2: Cdef Abc
-        3: Abef Hijk
+        :Example:
 
-        Then find_person_details_by_name('ab') will return [(1, Abcd Hijk), (2, Abef Abc), (3, Abef Hijk)].
-        find_person_details_by_name('abc') will return [(1, Abcd Hijk), (2, Abef Abc)]
-        find_person_details_by_name('abcd') will return [(1, Abcd Hijk)]
-        find_person_details_by_name('ab hi') will return [(1, Abcd Hijk), (3, Abef Hijk)]
-        find_person_details_by_name('abe hi') will return [(3, Abef Hijk)]
+        Assume you have persons with following persons (id: full name)::
+
+        >>> 1: Abcd Hijk
+        >>> 2: Cdef Abc
+        >>> 3: Abef Hijk
+
+        Then
+
+        >>> find_person_details_by_name('ab')
+
+        will return ``[(1, Abcd Hijk), (2, Abef Abc), (3, Abef Hijk)]``
+
+        >>> find_person_details_by_name('abc')
+
+        will return ``[(1, Abcd Hijk), (2, Abef Abc)]``
+
+        >>> find_person_details_by_name('abcd')
+
+        will return ``[(1, Abcd Hijk)]``
+
+        >>> find_person_details_by_name('ab hi')
+
+        will return ``[(1, Abcd Hijk), (3, Abef Hijk)]``
+
+        >>> find_person_details_by_name('abe hi')
+
+        will return ``>>> [(3, Abef Hijk)]``
 
         :param name: Prefix of any name attribute to lookup
         :type name: str
@@ -515,4 +534,3 @@ class ContactBookDB(object):
             # Since we only want results which match with all words in name, we need to take intersection
             # of merged_results (FastLookupValue overrides __eq__ so that the comparison works on id)
             return list(set.intersection(*result_sets))
-

@@ -3,6 +3,9 @@
 
 
 class NoSuchObjectFound(Exception):
+    """
+    Exception class which is raised if object with given id is not found in the database.
+    """
 
     def __init__(self, object_type, object_id, *args, **kwargs):
         super().__init__(*args, **kwargs)

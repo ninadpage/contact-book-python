@@ -95,3 +95,6 @@ ENV/
 # SQLite database files
 *.db
 tests/*.db
+
+# Sphinx documentation build files
+src/docs/_*
