@@ -9,9 +9,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
-from exceptions import NoSuchObjectFound
-from models import Base, Person, Address, PhoneNumber, EmailAddress, Group
-from fast_lookup import FastTrieLookup, FastLookupValue
+from .exceptions import NoSuchObjectFound
+from .models import Base, Person, Address, PhoneNumber, EmailAddress, Group
+from .fast_lookup import FastTrieLookup, FastLookupValue
 
 
 sqlalchemy_database_url = None

@@ -7,9 +7,11 @@ import logging.config
 import sys
 import os
 
-import models
-from db import db_init, fast_trie_lookup, ContactBookDB
-from exceptions import NoSuchObjectFound
+from contactbook import init_contactbook, ContactBookDB
+from contactbook import models
+from contactbook.db import fast_trie_lookup
+from contactbook.exceptions import NoSuchObjectFound
+
 
 logging_config = {
     'version': 1,
@@ -43,7 +45,7 @@ class TestContactBook(unittest.TestCase):
     TEST_DB_PATH = 'test.db'
 
     def setUp(self):
-        db_init(db_logger=logger, sqlite_db_path=self.TEST_DB_PATH)
+        init_contactbook(sqlite_db_path=self.TEST_DB_PATH, logger=logger)
 
     def test_trie_initialization(self):
         # Prepare initial state
@@ -53,7 +55,7 @@ class TestContactBook(unittest.TestCase):
 
         # Reinitialize contact book
         fast_trie_lookup.trie.clear()
-        db_init(db_logger=logger, sqlite_db_path=self.TEST_DB_PATH)
+        init_contactbook(sqlite_db_path=self.TEST_DB_PATH, logger=logger)
 
         # Test if trie is initialized properly
         r1 = cb.find_person_details_by_name('')
@@ -105,6 +107,8 @@ class TestContactBook(unittest.TestCase):
         cb = ContactBookDB()
         g1 = cb.create_group('G1')
         g2 = cb.create_group('G2')
+        self.assertIsInstance(g1, models.Group)
+        self.assertIsInstance(g2, models.Group)
 
         p1 = cb.create_person(first_name='P1', group_id=g1.id)
         p2 = cb.create_person(first_name='P2', group_id=g1.id)
