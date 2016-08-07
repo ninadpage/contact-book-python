@@ -23,11 +23,7 @@ Testsuite can be executed using `python setup.py test`
 >>> cb = contactbook.ContactBookDB()
 >>> p = cb.create_person(first_name='First', last_name='Last')
 >>> cb.get_all_persons()
-[<Person> P1
-Phone numbers: []
-Email addresses: []
-Addresses: []
-Groups: [], <Person> First Last
+[<Person> First Last
 Phone numbers: []
 Email addresses: []
 Addresses: []
