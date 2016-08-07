@@ -454,12 +454,14 @@ class ContactBookDB(object):
 
         Since we use SQL LIKE query to find matching persons, it's fairly straightforward to
         extend it to find match anywhere (instead of just as prefix).
-        i.e., SELECT when email LIKE '%<substr>%';
+        i.e., ``SELECT when email LIKE '%<substr>%';``
+
         However, such queries (patterns beginning with wildcards) need to do full-table scan
         as indices won't help for that kind of queries. It can be sped up by using FULLTEXT
         index in MySQL or using CONTAINS instead of LIKE in SQL Server (which again uses
         a full-text index). However, expect the performance gain to be limited as full-
         text indices typically split words.
+
         But in a contact book, looking up by email isn't typically expected to be an instant
         operation like looking up by name or phone number is, so any of the above solutions
         would do just fine.
