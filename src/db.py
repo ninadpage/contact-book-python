@@ -166,6 +166,8 @@ class ContactBookDB(object):
                     raise NoSuchObjectFound('Group', group_id)
                 person.groups.append(group)
 
+            # Intermediary commit to refresh the person object so that it gets updated with id
+            self.session.commit()
             fast_trie_lookup.add_person(person)
             return person
         else:
@@ -458,11 +460,30 @@ class ContactBookDB(object):
         return self.session.query(Person).filter(Person.email_addresses.any(
             EmailAddress.email.like('{}%'.format(email)))).all()
 
-    @sqlalchemy_session()
-    def find_person_details_by_prefix(self, prefix):
+    @staticmethod
+    def _find_person_details_by_prefix(prefix):
         """
-        Returns short details of a person (person id and full name) given a prefix. This prefix can be
-        of any of person's attributes (i.e., first_name, last_name, etc). Lookup is case-insensitive.
+        Helper method for find_person_details_by_name which only works for a single word `prefix`.
+        """
+        result = fast_trie_lookup.get_persons_by_prefix(prefix)
+        # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
+        # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
+        # duplicates.
+        merged = {}
+        for d in result:
+            merged.update(d)
+        # Create a list of namedtuples <FastLookupValue> from merged result
+        return list(map(lambda kv: FastLookupValue(*kv), merged.items()))
+
+    @classmethod
+    def find_person_details_by_name(cls, name):
+        """
+        Returns short details of a person (person id and full name) given a name. This name can be
+        of any of person's attributes (i.e., first_name, last_name, etc) and can even be a prefix.
+        Lookup is case-insensitive.
+
+        If name is space separated, each word is searched individually, and results matching _both_
+        are returned. This can be used to search for persons with matching first name & last name (both).
 
         This lookup is extremely fast as it is performed on an in-memory trie which caches these details.
         So this method can be used to implement Auto-Complete for a Contacts app, where you call this
@@ -474,22 +495,59 @@ class ContactBookDB(object):
         2: Cdef Abc
         3: Abef Hijk
 
-        Then find_person_details_by_prefix('ab') will return [(1, Abcd Hijk), (2, Abef Abc), (3, Abef Hijk)].
-        find_person_details_by_prefix('abc') will return [(1, Abcd Hijk), (2, Abef Abc)]
-        find_person_details_by_prefix('abcd') will return [(1, Abcd Hijk)]
+        Then find_person_details_by_name('ab') will return [(1, Abcd Hijk), (2, Abef Abc), (3, Abef Hijk)].
+        find_person_details_by_name('abc') will return [(1, Abcd Hijk), (2, Abef Abc)]
+        find_person_details_by_name('abcd') will return [(1, Abcd Hijk)]
+        find_person_details_by_name('ab hi') will return [(1, Abcd Hijk), (3, Abef Hijk)]
+        find_person_details_by_name('abe hi') will return [(3, Abef Hijk)]
 
-
-        :param prefix: Prefix of any name attribute to lookup
-        :type prefix: str
+        :param name: Prefix of any name attribute to lookup
+        :type name: str
         :return: List of short persons' details (which are namedtuples with fields id and full_name)
         :rtype: <list (fast_lookup.FastLookupValue)>
+
+
+        if not name:
+            all_results = fast_trie_lookup.get_persons_by_prefix('')
+            # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
+            # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
+            # duplicates.
+            merged = {}
+            for d in all_results:
+                merged.update(d)
+            result = merged
+        else:
+            merged_results = []
+            for word in name.split():
+                all_results = fast_trie_lookup.get_persons_by_prefix(word)
+                # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
+                # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
+                # duplicates.
+                merged = {}
+                for d in all_results:
+                    merged.update(d)
+                merged_results.append(merged)
+
+            # Since we only want results which match with all words in name, we need to take intersection
+            # of merged_results
+            keys_list = list(map(lambda d: d.keys(), merged_results))
+            intersection_keys = set.intersection(*keys_list)
+            result = {}
+            for d in merged_results:
+                result.update({x: d[x] for x in d if x in intersection_keys})
+
+        # Create a list of namedtuples <FastLookupValue> from final result
+        return list(map(lambda kv: FastLookupValue(*kv), result.items()))
+
+
         """
-        result = fast_trie_lookup.get_persons_by_prefix(prefix)
-        # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
-        # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
-        # duplicates.
-        merged = {}
-        for d in result:
-            merged.update(d)
-        # Create a list of namedtuples <FastLookupValue> from merged result
-        return list(map(lambda kv: FastLookupValue(*kv), merged.items()))
+        if not name or len(name.split()) == 1:
+            return cls._find_person_details_by_prefix(name)
+        else:
+            result_sets = []
+            for word in name.split():
+                result_sets.append(set(cls._find_person_details_by_prefix(word)))
+            # Since we only want results which match with all words in name, we need to take intersection
+            # of merged_results (FastLookupValue overrides __eq__ so that the comparison works on id)
+            return list(set.intersection(*result_sets))
+

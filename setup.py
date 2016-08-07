@@ -9,7 +9,6 @@ setup(name='contactbook',
       url='https://github.com/ninadpage/contact-book-python',
       author='Ninad Page',
       license='MIT',
-      packages=[],
       package_dir={
           '': 'src',
       },

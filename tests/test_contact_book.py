@@ -56,14 +56,14 @@ class TestContactBook(unittest.TestCase):
         db_init(db_logger=logger, sqlite_db_path=self.TEST_DB_PATH)
 
         # Test if trie is initialized properly
-        r1 = cb.find_person_details_by_prefix('')
+        r1 = cb.find_person_details_by_name('')
         self.assertEqual(len(r1), 2)
 
-        r2 = cb.find_person_details_by_prefix('ab')
+        r2 = cb.find_person_details_by_name('ab')
         self.assertEqual(len(r2), 1)
         self.assertEqual(r2[0].id, p1.id)
 
-        r3 = cb.find_person_details_by_prefix('xyz')
+        r3 = cb.find_person_details_by_name('xyz')
         self.assertEqual(len(r3), 1)
         self.assertEqual(r3[0].id, p2.id)
 
@@ -205,9 +205,9 @@ class TestContactBook(unittest.TestCase):
         p2 = cb.create_person(first_name='Xyz', middle_name='Abcd', last_name='Def')
         p3 = cb.create_person(first_name='Tuf', last_name='Def')
 
-        res = cb.find_person_details_by_prefix('')
+        res = cb.find_person_details_by_name('')
         self.assertEqual(len(res), 3)
-        res = cb.find_person_details_by_prefix('Abcd')
+        res = cb.find_person_details_by_name('Abcd')
         self.assertEqual(len(res), 2)
         self.assertSetEqual({(res[0].id, res[0].full_name), (res[1].id, res[1].full_name)},
                             {(p1.id, 'Abcd Abxy'), (p2.id, 'Xyz Abcd Def')})
@@ -220,31 +220,55 @@ class TestContactBook(unittest.TestCase):
                 self.assertEqual(p.email_addresses, p1.email_addresses)
 
         # Test updating trie after deletion of persons
-        res = cb.find_person_details_by_prefix('Def')
+        res = cb.find_person_details_by_name('Def')
         self.assertEqual(len(res), 2)
         self.assertSetEqual({res[0].id, res[1].id}, {p2.id, p3.id})
         cb.delete_person(p3.id)
-        res = cb.find_person_details_by_prefix('Def')
+        res = cb.find_person_details_by_name('Def')
         self.assertEqual(len(res), 1)
         self.assertSetEqual({res[0].id}, {p2.id})
 
         # Test updating trie after updating persons
-        res = cb.find_person_details_by_prefix('ab')
+        res = cb.find_person_details_by_name('ab')
         self.assertEqual(len(res), 2)
         self.assertSetEqual({res[0].id, res[1].id}, {p1.id, p2.id})
 
         p1.first_name = 'Xyzzy'
         cb.save_object(p1)
         # Still last name starts with ab
-        res = cb.find_person_details_by_prefix('ab')
+        res = cb.find_person_details_by_name('ab')
         self.assertEqual(len(res), 2)
         self.assertSetEqual({res[0].id, res[1].id}, {p1.id, p2.id})
 
         p1.last_name = 'Spoon'
         cb.save_object(p1)
-        res = cb.find_person_details_by_prefix('ab')
+        res = cb.find_person_details_by_name('ab')
         self.assertEqual(len(res), 1)
         self.assertSetEqual({res[0].id}, {p2.id})
+
+        # Test non-duplicate results (e.g. when both first name & last name match a prefix)
+        p4 = cb.create_person(first_name='Pqrs', last_name='Pqr')
+        p5 = cb.create_person(first_name='Xy', last_name='Pqr')
+        res = cb.find_person_details_by_name('pq')
+        self.assertEqual(len(res), 2)
+        self.assertSetEqual({res[0].id, res[1].id}, {p4.id, p5.id})
+
+    def test_trie_lookup_multi_word(self):
+        cb = ContactBookDB()
+        p1 = cb.create_person(first_name='Abcd', last_name='Hijk')
+        p2 = cb.create_person(first_name='Cdef', last_name='Abc')
+        p3 = cb.create_person(first_name='Abef', last_name='Hijk')
+
+        res = cb.find_person_details_by_name('ab hi')
+        self.assertEqual(len(res), 2)
+        self.assertSetEqual({res[0].id, res[1].id}, {p1.id, p3.id})
+
+        res = cb.find_person_details_by_name('abe hi')
+        self.assertEqual(len(res), 1)
+        self.assertSetEqual({res[0].id}, {p3.id})
+
+        res = cb.find_person_details_by_name('ab hi c')
+        self.assertEqual(len(res), 0)
 
     def test_get_persons_by_email(self):
         cb = ContactBookDB()
