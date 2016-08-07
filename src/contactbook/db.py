@@ -532,7 +532,7 @@ class ContactBookDB(object):
 
         >>> find_person_details_by_name('abe hi')
 
-        will return ``>>> [(3, Abef Hijk)]``
+        will return ``[(3, Abef Hijk)]``
 
         :param name: Prefix of any name attribute to lookup
         :type name: str
