@@ -16,5 +16,6 @@ setup(name='contactbook',
       test_suite='tests',
       install_requires=[
           'SQLAlchemy==1.0.14',
+          'PyTrie==0.2',
       ]
       )
