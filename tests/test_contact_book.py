@@ -246,6 +246,25 @@ class TestContactBook(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertSetEqual({res[0].id}, {p2.id})
 
+    def test_get_persons_by_email(self):
+        cb = ContactBookDB()
+        p1 = cb.create_person(first_name='P1', email_address='abc@example.com')
+        p2 = cb.create_person(first_name='P1', email_address='xyz@example.com')
+        p3 = cb.create_person(first_name='P1', email_address='abc@badexample.com')
+
+        res = cb.get_persons_by_email('abc@example.com')
+        self.assertEqual(len(res), 1)
+        self.assertSetEqual({res[0].id}, {p1.id})
+
+        res = cb.get_persons_by_email('abc')
+        self.assertEqual(len(res), 2)
+        self.assertSetEqual({res[0].id, res[1].id}, {p1.id, p3.id})
+
+        cb.add_email_address(p2.id, 'abc@example.com')
+        res = cb.get_persons_by_email('abc@example.com')
+        self.assertEqual(len(res), 2)
+        self.assertSetEqual({res[0].id, res[1].id}, {p1.id, p2.id})
+
     def test_persistence(self):
         cb = ContactBookDB()
         g1 = cb.create_group('G1')

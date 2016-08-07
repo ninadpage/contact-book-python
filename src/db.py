@@ -444,6 +444,21 @@ class ContactBookDB(object):
         return result
 
     @sqlalchemy_session()
+    def get_persons_by_email(self, email):
+        """
+        Returns all persons with matching email address. `email` can be prefix of the address.
+        e.g., for a person with email abc@example.com, it will return that person for both
+        email='abc@example.com' and email='abc'.
+
+        :param email: Email address to filter persons on (can be a prexix)
+        :type email: str
+        :return: List of persons
+        :rtype: <list (models.Person)>
+        """
+        return self.session.query(Person).filter(Person.email_addresses.any(
+            EmailAddress.email.like('{}%'.format(email)))).all()
+
+    @sqlalchemy_session()
     def find_person_details_by_prefix(self, prefix):
         """
         Returns short details of a person (person id and full name) given a prefix. This prefix can be
