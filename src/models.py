@@ -40,7 +40,7 @@ class Person(Base):
     def full_name(self):
         return '{}{}'.format(' '.join([s for s in [self.title, self.first_name, self.middle_name, self.last_name]
                                       if s is not None]),
-                             ', {}'.format(self.suffix if self.suffix else ''))
+                             ', {}'.format(self.suffix) if self.suffix else '')
 
     def __str__(self):
         return '<Person> {}\nPhone numbers: {}\nEmail addresses: {}\nAddresses: {}\nGroups: {}'.format(
@@ -96,7 +96,7 @@ class Address(AbstractField):
 
     def __str__(self):
         return '<Address> {}: {}'.format(self.label if self.label else 'No label',
-                                         ' ,'.join([s for s in [self.street_name, self.house_number,
+                                         ', '.join([s for s in [self.street_name, self.house_number,
                                                                 self.address_line_1, self.address_line_2,
                                                                 self.postal_code, self.city, self.country]
                                                     if s is not None]))

@@ -51,7 +51,7 @@ def db_init(*, db_logger, sqlite_db_path=None, db_connection_string=None):
 
     sqlalchemy_database_url = _db_connection_string
     sqlalchemy_engine = create_engine(sqlalchemy_database_url)
-    sqlalchemy_sessionmaker = sessionmaker(bind=sqlalchemy_engine, expire_on_commit=False)
+    sqlalchemy_sessionmaker = sessionmaker(bind=sqlalchemy_engine)
 
     Base.metadata.create_all(sqlalchemy_engine)
     init_lookup_trie_with_existing_persons()
@@ -69,7 +69,7 @@ def init_lookup_trie_with_existing_persons():
         fast_trie_lookup.add_person(person)
 
 
-def sqlalchemy_session(commit=False, expunge=False, extra_sessions=0):
+def sqlalchemy_session(commit=False, expunge=False, close_session=False):
     """
     Decorator for ContactBookDB methods, which creates a SQLAlchemy session, rolls back in case of any exception and
     disposes it off after use. The session is available as `self.session` inside the method which adds this decorator.
@@ -88,13 +88,8 @@ def sqlalchemy_session(commit=False, expunge=False, extra_sessions=0):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             self = args[0]
-            self.session = sqlalchemy_sessionmaker()
-            if extra_sessions:
-                self.sessions = []
-                for _ in range(extra_sessions):
-                    self.sessions.append(sqlalchemy_sessionmaker())
-            else:
-                self.sessions = None
+            if self.session is None:
+                self.session = sqlalchemy_sessionmaker()
 
             try:
                 ret_value = func(*args, **kwargs)
@@ -107,16 +102,10 @@ def sqlalchemy_session(commit=False, expunge=False, extra_sessions=0):
                     self.session.commit()
                 if expunge:
                     self.session.expunge_all()
-                    if extra_sessions:
-                        for i in range(extra_sessions):
-                            self.sessions[i].expunge_all()
             finally:
-                self.session.close()
-                self.session = None
-                if extra_sessions:
-                    for i in range(extra_sessions):
-                        self.sessions[i].close()
-                self.sessions = None
+                if close_session:
+                    self.session.close()
+                    self.session = None
 
             return ret_value
         return wrapper
@@ -128,24 +117,7 @@ class ContactBookDB(object):
     def __init__(self):
         self.session = None
 
-    def _refresh_created_object(self, cls, obj):
-        """
-        Since we always expunge all objects from session before returning to caller, they are not associated
-        with any session. But the objects have relationships defined with other tables (e.g. person.groups),
-        lazily loaded by default (i.e., queried again), which requires session.
-        We specify eager loading strategy in relationship clause to load all associations at once, but
-        for a newly created object, if we add associations later, it needs to be refreshed by querying again.
-
-        This helper method will query the database for given class & id.
-        """
-        # Write any pending changes to database
-        self.session.commit()
-        obj = self.session.query(cls).get(obj.id)
-        if obj is None:
-            raise NoSuchObjectFound(cls.__name__, obj.id)
-        return obj
-
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True)
     def create_person(self, title=None, first_name=None, middle_name=None, last_name=None, *, suffix=None,
                       phone_number=None, phone_label=None, email_address=None, email_label=None,
                       group_id=None):
@@ -194,20 +166,12 @@ class ContactBookDB(object):
                     raise NoSuchObjectFound('Group', group_id)
                 person.groups.append(group)
 
-            person = self._refresh_created_object(Person, person)
-            # person.groups
-            # person.phone_numbers
-            # person.email_addresses
-            # person.addresses
             fast_trie_lookup.add_person(person)
-
-            # This person object is detached from session by the decorator, so that
-            # the caller can safely manipulate it
             return person
         else:
             raise ValueError('At least one of first_name, middle_name and last_name must be specified')
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True)
     def create_group(self, name):
         """
         Adds a new group.
@@ -222,10 +186,9 @@ class ContactBookDB(object):
         group = Group(name=name)
         self.session.add(group)
 
-        group = self._refresh_created_object(Group, group)
         return group
 
-    @sqlalchemy_session(expunge=True)
+    @sqlalchemy_session()
     def get_person_by_id(self, person_id):
         """
         Returns a Person object with given id.
@@ -240,7 +203,7 @@ class ContactBookDB(object):
             raise NoSuchObjectFound('Person', person_id)
         return person
 
-    @sqlalchemy_session(expunge=True)
+    @sqlalchemy_session()
     def get_group_by_id(self, group_id):
         """
         Returns a Group object with given id.
@@ -274,7 +237,7 @@ class ContactBookDB(object):
             raise NoSuchObjectFound('Group', group_id)
         person.groups.append(group)
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True)
     def add_phone_number(self, person_id, phone_number, phone_label=None):
         """
         Adds a new phone number to person specified by person_id.
@@ -295,10 +258,9 @@ class ContactBookDB(object):
             raise NoSuchObjectFound('Person', person_id)
         phone = PhoneNumber(person=person, phone=phone_number, label=phone_label)
         self.session.add(phone)
-        phone = self._refresh_created_object(PhoneNumber, phone)
         return phone
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True)
     def add_email_address(self, person_id, email_address, email_label=None):
         """
         Adds a new email address to person specified by person_id.
@@ -317,12 +279,11 @@ class ContactBookDB(object):
         person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
-        email = EmailAddress(person=person, phone=email_address, label=email_label)
+        email = EmailAddress(person=person, email=email_address, label=email_label)
         self.session.add(email)
-        email = self._refresh_created_object(EmailAddress, email)
         return email
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True)
     def add_address(self, person_id, house_number=None, street_name=None, address_line_1=None,
                     address_line_2=None, city=None, postal_code=None, country=None, address_label=None):
         """
@@ -359,7 +320,6 @@ class ContactBookDB(object):
                           address_line_1=address_line_1, address_line_2=address_line_2, city=city,
                           postal_code=postal_code, country=country, label=address_label)
         self.session.add(address)
-        address = self._refresh_created_object(Address, address)
         return address
 
     @sqlalchemy_session(commit=True)
@@ -439,8 +399,8 @@ class ContactBookDB(object):
             raise NoSuchObjectFound('Address', address_id)
         self.session.delete(address)
 
-    @sqlalchemy_session(commit=True, expunge=True, extra_sessions=1)
-    def update_object(self, obj):
+    @sqlalchemy_session(commit=True)
+    def save_object(self, obj):
         """
         Writes in-memory changes done to an SQLAlchemy object to database.
 
@@ -452,20 +412,20 @@ class ContactBookDB(object):
         # Updating Person object is tricky, because we also need to update lookup trie,
         # but for that we need old name attributes of Person.
         if isinstance(obj, Person):
-            # Using extra read-only session to read existing (before updating) data of person
-            old_person = self.session[0].query(Person).get(obj.id)
+            # Using new session to read existing (before updating) data of person
+            global sqlalchemy_sessionmaker
+            session = sqlalchemy_sessionmaker()
+            old_person = session.query(Person).get(obj.id)
             if old_person is None:
                 raise NoSuchObjectFound('Person', obj.id)
             fast_trie_lookup.remove_person(old_person)
 
-        # Since all results are detached (expunged) from session before returning, we merge the object
-        # in current session so that the updates can be written to the database.
         self.session.merge(obj)
         if isinstance(obj, Person):
             fast_trie_lookup.add_person(obj)
         return obj
 
-    @sqlalchemy_session(expunge=True)
+    @sqlalchemy_session()
     def get_all_persons(self, group_id=None):
         """
         Returns all persons. Optionally filters based on given group_id.
@@ -483,7 +443,7 @@ class ContactBookDB(object):
         # the caller can safely manipulate it
         return result
 
-    @sqlalchemy_session(expunge=True)
+    @sqlalchemy_session()
     def find_person_details_by_prefix(self, prefix):
         """
         Returns short details of a person (person id and full name) given a prefix. This prefix can be
