@@ -4,7 +4,6 @@
 from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
 from sqlalchemy.orm import relationship
-from sqlalchemy.testing.schema import Table
 
 Base = declarative_base()
 
@@ -30,15 +29,24 @@ class Person(Base):
     last_name = Column(String(length=256))
     suffix = Column(String(length=256))
 
-    addresses = relationship("Address", back_populates="person", cascade="all, delete-orphan")
-    phone_numbers = relationship("PhoneNumber", back_populates="person", cascade="all, delete-orphan")
-    email_addresses = relationship("EmailAddress", back_populates="person", cascade="all, delete-orphan")
+    addresses = relationship("Address", back_populates="person", lazy="joined", cascade="all, delete-orphan")
+    phone_numbers = relationship("PhoneNumber", back_populates="person", lazy="joined", cascade="all, delete-orphan")
+    email_addresses = relationship("EmailAddress", back_populates="person", lazy="joined",
+                                   cascade="all, delete-orphan")
 
-    groups = relationship("Group", secondary="person_group_associations", back_populates="persons")
+    groups = relationship("Group", secondary="person_group_associations", lazy="joined", back_populates="persons")
 
     @property
     def full_name(self):
-        return '{} {} {} {}, {}'.format(self.title, self.first_name, self.middle_name, self.last_name, self.suffix)
+        return '{}{}'.format(' '.join([s for s in [self.title, self.first_name, self.middle_name, self.last_name]
+                                      if s is not None]),
+                             ', {}'.format(self.suffix if self.suffix else ''))
+
+    def __str__(self):
+        return '<Person> {}\nPhone numbers: {}\nEmail addresses: {}\nAddresses: {}\nGroups: {}'.format(
+            self.full_name, self.phone_numbers, self.email_addresses, self.addresses, self.groups)
+
+    __repr__ = __str__
 
 
 class Group(Base):
@@ -47,7 +55,12 @@ class Group(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(length=256))
 
-    persons = relationship("Person", secondary='person_group_associations', back_populates="groups")
+    persons = relationship("Person", secondary='person_group_associations', lazy="joined", back_populates="groups")
+
+    def __str__(self):
+        return '<Group> {}'.format(self.name)
+
+    __repr__ = __str__
 
 
 class AbstractField(Base):
@@ -61,6 +74,7 @@ class AbstractField(Base):
     id = Column(Integer, primary_key=True)
     label = Column(String(length=255))
 
+    # noinspection PyMethodParameters
     @declared_attr
     def person_id(cls):
         return Column(Integer, ForeignKey('persons.id'))
@@ -77,7 +91,17 @@ class Address(AbstractField):
     postal_code = Column(String(length=32))
     country = Column(String(length=256))
 
-    person = relationship("Person", back_populates="addresses", single_parent=True, cascade="all, delete-orphan")
+    person = relationship("Person", back_populates="addresses", single_parent=True, lazy="joined",
+                          cascade="all, delete-orphan")
+
+    def __str__(self):
+        return '<Address> {}: {}'.format(self.label if self.label else 'No label',
+                                         ' ,'.join([s for s in [self.street_name, self.house_number,
+                                                                self.address_line_1, self.address_line_2,
+                                                                self.postal_code, self.city, self.country]
+                                                    if s is not None]))
+
+    __repr__ = __str__
 
 
 class PhoneNumber(AbstractField):
@@ -85,7 +109,13 @@ class PhoneNumber(AbstractField):
 
     phone = Column(String(length=256), nullable=False)
 
-    person = relationship("Person", back_populates="phone_numbers", single_parent=True, cascade="all, delete-orphan")
+    person = relationship("Person", back_populates="phone_numbers", single_parent=True, lazy="joined",
+                          cascade="all, delete-orphan")
+
+    def __str__(self):
+        return '<PhoneNumber> {}: {}'.format(self.label if self.label else 'No label', self.phone)
+
+    __repr__ = __str__
 
 
 class EmailAddress(AbstractField):
@@ -93,4 +123,10 @@ class EmailAddress(AbstractField):
 
     email = Column(String(length=256), nullable=False)
 
-    person = relationship("Person", back_populates="email_addresses", single_parent=True, cascade="all, delete-orphan")
+    person = relationship("Person", back_populates="email_addresses", single_parent=True, lazy="joined",
+                          cascade="all, delete-orphan")
+
+    def __str__(self):
+        return '<EmailAddress> {}: {}'.format(self.label if self.label else 'No label', self.email)
+
+    __repr__ = __str__

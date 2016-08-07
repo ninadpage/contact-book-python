@@ -5,7 +5,7 @@ import logging
 import logging.config
 import sys
 
-from .src.db import db_init, ContactBookDB
+from db import db_init, ContactBookDB
 
 
 __all__ = ['__version__', 'init_contactbook', 'ContactBookDB']

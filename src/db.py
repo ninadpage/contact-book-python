@@ -7,15 +7,19 @@ import sqlite3
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 
-from .exceptions import NoSuchObjectFound
-from .models import Base, Person, Address, PhoneNumber, EmailAddress, Group
+from exceptions import NoSuchObjectFound
+from models import Base, Person, Address, PhoneNumber, EmailAddress, Group
+from fast_lookup import FastTrieLookup, FastLookupValue
 
 
 sqlalchemy_database_url = None
 sqlalchemy_engine = None
 sqlalchemy_sessionmaker = None
 logger = None
+
+fast_trie_lookup = FastTrieLookup()
 
 
 @event.listens_for(Engine, "connect")
@@ -50,12 +54,32 @@ def db_init(*, db_logger, sqlite_db_path=None, db_connection_string=None):
     sqlalchemy_sessionmaker = sessionmaker(bind=sqlalchemy_engine, expire_on_commit=False)
 
     Base.metadata.create_all(sqlalchemy_engine)
+    init_lookup_trie_with_existing_persons()
 
 
-def sqlalchemy_session(commit=False, expunge=False):
+def init_lookup_trie_with_existing_persons():
+    """
+    Feeds existing person records into lookup trie.
+
+    :return: None
+    """
+    cb = ContactBookDB()
+    persons = cb.get_all_persons()
+    for person in persons:
+        fast_trie_lookup.add_person(person)
+
+
+def sqlalchemy_session(commit=False, expunge=False, extra_sessions=0):
     """
     Decorator for ContactBookDB methods, which creates a SQLAlchemy session, rolls back in case of any exception and
     disposes it off after use. The session is available as `self.session` inside the method which adds this decorator.
+
+    One problem with this decorator is, since it overwrites self.session every time it is invoked,
+    you cannot call one decorated method from other decorated method, as the latter invocation will
+    overwrite prior invocation's session.
+    So what if you want to cleanly manipulate two objects from same method, but without letting their sessions
+    mix? You can use `extra_sessions` parameter. It'll create a list of sessions of given length, available
+    as `self.sessions`. Note that these sessions are read-only, they cannot be committed.
     """
     global sqlalchemy_sessionmaker
 
@@ -65,10 +89,16 @@ def sqlalchemy_session(commit=False, expunge=False):
         def wrapper(*args, **kwargs):
             self = args[0]
             self.session = sqlalchemy_sessionmaker()
+            if extra_sessions:
+                self.sessions = []
+                for _ in range(extra_sessions):
+                    self.sessions.append(sqlalchemy_sessionmaker())
+            else:
+                self.sessions = None
 
             try:
                 ret_value = func(*args, **kwargs)
-            except Exception as e:
+            except SQLAlchemyError as e:
                 self.session.rollback()
                 logger.error('Exception in SQLAlchemy session: {}\n{}'.format(e, traceback.format_exc()))
                 raise
@@ -77,9 +107,16 @@ def sqlalchemy_session(commit=False, expunge=False):
                     self.session.commit()
                 if expunge:
                     self.session.expunge_all()
+                    if extra_sessions:
+                        for i in range(extra_sessions):
+                            self.sessions[i].expunge_all()
             finally:
                 self.session.close()
                 self.session = None
+                if extra_sessions:
+                    for i in range(extra_sessions):
+                        self.sessions[i].close()
+                self.sessions = None
 
             return ret_value
         return wrapper
@@ -91,10 +128,27 @@ class ContactBookDB(object):
     def __init__(self):
         self.session = None
 
+    def _refresh_created_object(self, cls, obj):
+        """
+        Since we always expunge all objects from session before returning to caller, they are not associated
+        with any session. But the objects have relationships defined with other tables (e.g. person.groups),
+        lazily loaded by default (i.e., queried again), which requires session.
+        We specify eager loading strategy in relationship clause to load all associations at once, but
+        for a newly created object, if we add associations later, it needs to be refreshed by querying again.
+
+        This helper method will query the database for given class & id.
+        """
+        # Write any pending changes to database
+        self.session.commit()
+        obj = self.session.query(cls).get(obj.id)
+        if obj is None:
+            raise NoSuchObjectFound(cls.__name__, obj.id)
+        return obj
+
     @sqlalchemy_session(commit=True, expunge=True)
-    def add_person(self, title=None, first_name=None, middle_name=None, last_name=None, *, suffix=None,
-                   phone_number=None, phone_label=None, email_address=None, email_label=None,
-                   group_id=None):
+    def create_person(self, title=None, first_name=None, middle_name=None, last_name=None, *, suffix=None,
+                      phone_number=None, phone_label=None, email_address=None, email_label=None,
+                      group_id=None):
         """
         Adds a person and optionally, associated details (phone number, email, group). The group must exist.
         Street address can be later added manually. Addition details such as other phone numbers
@@ -135,10 +189,17 @@ class ContactBookDB(object):
                 email = EmailAddress(person=person, email=email_address, label=email_label)
                 self.session.add(email)
             if group_id:
-                group = self.session.query(Group).select_by(id=group_id).one_or_none()
+                group = self.session.query(Group).get(group_id)
                 if group is None:
                     raise NoSuchObjectFound('Group', group_id)
                 person.groups.append(group)
+
+            person = self._refresh_created_object(Person, person)
+            # person.groups
+            # person.phone_numbers
+            # person.email_addresses
+            # person.addresses
+            fast_trie_lookup.add_person(person)
 
             # This person object is detached from session by the decorator, so that
             # the caller can safely manipulate it
@@ -147,7 +208,7 @@ class ContactBookDB(object):
             raise ValueError('At least one of first_name, middle_name and last_name must be specified')
 
     @sqlalchemy_session(commit=True, expunge=True)
-    def add_group(self, name):
+    def create_group(self, name):
         """
         Adds a new group.
 
@@ -160,6 +221,38 @@ class ContactBookDB(object):
             raise ValueError('Group name must be specified')
         group = Group(name=name)
         self.session.add(group)
+
+        group = self._refresh_created_object(Group, group)
+        return group
+
+    @sqlalchemy_session(expunge=True)
+    def get_person_by_id(self, person_id):
+        """
+        Returns a Person object with given id.
+
+        :param person_id: id of the person
+        :type person_id: int
+        :return: Person object
+        :rtype: models.Person
+        """
+        person = self.session.query(Person).get(person_id)
+        if person is None:
+            raise NoSuchObjectFound('Person', person_id)
+        return person
+
+    @sqlalchemy_session(expunge=True)
+    def get_group_by_id(self, group_id):
+        """
+        Returns a Group object with given id.
+
+        :param group_id: id of the group
+        :type group_id: int
+        :return: Group object
+        :rtype: models.Group
+        """
+        group = self.session.query(Group).get(group_id)
+        if group is None:
+            raise NoSuchObjectFound('Group', group_id)
         return group
 
     @sqlalchemy_session(commit=True)
@@ -173,10 +266,10 @@ class ContactBookDB(object):
         :type group_id: int
         :return: None
         """
-        person = self.session.query(Person).select_by(id=person_id).one_or_none()
+        person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
-        group = self.session.query(Group).select_by(id=group_id).one_or_none()
+        group = self.session.query(Group).get(group_id)
         if group is None:
             raise NoSuchObjectFound('Group', group_id)
         person.groups.append(group)
@@ -197,12 +290,12 @@ class ContactBookDB(object):
         """
         if not phone_number:
             raise ValueError('Phone number must be specified')
-        person = self.session.query(Person).select_by(id=person_id).one_or_none()
+        person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
         phone = PhoneNumber(person=person, phone=phone_number, label=phone_label)
         self.session.add(phone)
-        self.session.expunge(phone)
+        phone = self._refresh_created_object(PhoneNumber, phone)
         return phone
 
     @sqlalchemy_session(commit=True, expunge=True)
@@ -221,12 +314,12 @@ class ContactBookDB(object):
         """
         if not email_address:
             raise ValueError('Email address must be specified')
-        person = self.session.query(Person).select_by(id=person_id).one_or_none()
+        person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
         email = EmailAddress(person=person, phone=email_address, label=email_label)
         self.session.add(email)
-        self.session.expunge(email)
+        email = self._refresh_created_object(EmailAddress, email)
         return email
 
     @sqlalchemy_session(commit=True, expunge=True)
@@ -259,14 +352,14 @@ class ContactBookDB(object):
 
         if not any([house_number, street_name, address_line_1, address_line_2, city, postal_code, country]):
             raise ValueError('At least one address field must be specified')
-        person = self.session.query(Person).select_by(id=person_id).one_or_none()
+        person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
         address = Address(person=person, house_number=house_number, street_name=street_name,
                           address_line_1=address_line_1, address_line_2=address_line_2, city=city,
                           postal_code=postal_code, country=country, label=address_label)
         self.session.add(address)
-        self.session.expunge(address)
+        address = self._refresh_created_object(Address, address)
         return address
 
     @sqlalchemy_session(commit=True)
@@ -279,9 +372,11 @@ class ContactBookDB(object):
         :type person_id: int
         :return: None
         """
-        person = self.session.query(Person).select_by(id=person_id).one_or_none()
+        person = self.session.query(Person).get(person_id)
         if person is None:
             raise NoSuchObjectFound('Person', person_id)
+        # Also delete the person from lookup trie
+        fast_trie_lookup.remove_person(person)
         # cascade clause used in defining relationships in models will take care of deleting associated
         # rows from other tables (phone_numbers, addresses, person_group_associations, etc).
         self.session.delete(person)
@@ -295,7 +390,7 @@ class ContactBookDB(object):
         :type group_id: int
         :return: None
         """
-        group = self.session.query(Group).select_by(id=group_id).one_or_none()
+        group = self.session.query(Group).get(group_id)
         if group is None:
             raise NoSuchObjectFound('Group', group_id)
         # cascade clause used in defining relationships in models will take care of deleting associated rows
@@ -311,7 +406,7 @@ class ContactBookDB(object):
         :type phone_number_id: int
         :return: None
         """
-        phone = self.session.query(PhoneNumber).select_by(id=phone_number_id).one_or_none()
+        phone = self.session.query(PhoneNumber).get(phone_number_id)
         if phone is None:
             raise NoSuchObjectFound('PhoneNumber', phone_number_id)
         self.session.delete(phone)
@@ -325,7 +420,7 @@ class ContactBookDB(object):
         :type email_address_id: int
         :return: None
         """
-        email = self.session.query(EmailAddress).select_by(id=email_address_id).one_or_none()
+        email = self.session.query(EmailAddress).get(email_address_id)
         if email is None:
             raise NoSuchObjectFound('EmailAddress', email_address_id)
         self.session.delete(email)
@@ -339,12 +434,12 @@ class ContactBookDB(object):
         :type address_id: int
         :return: None
         """
-        address = self.session.query(Address).select_by(id=address_id).one_or_none()
+        address = self.session.query(Address).get(address_id)
         if address is None:
             raise NoSuchObjectFound('Address', address_id)
         self.session.delete(address)
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(commit=True, expunge=True, extra_sessions=1)
     def update_object(self, obj):
         """
         Writes in-memory changes done to an SQLAlchemy object to database.
@@ -354,12 +449,23 @@ class ContactBookDB(object):
         :return: Updated object
         :rtype: sqlalchemy.ext.declarative.api.Base
         """
+        # Updating Person object is tricky, because we also need to update lookup trie,
+        # but for that we need old name attributes of Person.
+        if isinstance(obj, Person):
+            # Using extra read-only session to read existing (before updating) data of person
+            old_person = self.session[0].query(Person).get(obj.id)
+            if old_person is None:
+                raise NoSuchObjectFound('Person', obj.id)
+            fast_trie_lookup.remove_person(old_person)
+
         # Since all results are detached (expunged) from session before returning, we merge the object
         # in current session so that the updates can be written to the database.
         self.session.merge(obj)
+        if isinstance(obj, Person):
+            fast_trie_lookup.add_person(obj)
         return obj
 
-    @sqlalchemy_session(commit=True, expunge=True)
+    @sqlalchemy_session(expunge=True)
     def get_all_persons(self, group_id=None):
         """
         Returns all persons. Optionally filters based on given group_id.
@@ -376,3 +482,39 @@ class ContactBookDB(object):
         # This query result is detached from session by the decorator, so that
         # the caller can safely manipulate it
         return result
+
+    @sqlalchemy_session(expunge=True)
+    def find_person_details_by_prefix(self, prefix):
+        """
+        Returns short details of a person (person id and full name) given a prefix. This prefix can be
+        of any of person's attributes (i.e., first_name, last_name, etc). Lookup is case-insensitive.
+
+        This lookup is extremely fast as it is performed on an in-memory trie which caches these details.
+        So this method can be used to implement Auto-Complete for a Contacts app, where you call this
+        every time a character is entered by the user, show the user list of matching full names which
+        is updated instantly, and when the user picks one, use the id to fetch full details of the person.
+
+        Example: Assume you have persons with following full names:
+        1: Abcd Hijk
+        2: Cdef Abc
+        3: Abef Hijk
+
+        Then find_person_details_by_prefix('ab') will return [(1, Abcd Hijk), (2, Abef Abc), (3, Abef Hijk)].
+        find_person_details_by_prefix('abc') will return [(1, Abcd Hijk), (2, Abef Abc)]
+        find_person_details_by_prefix('abcd') will return [(1, Abcd Hijk)]
+
+
+        :param prefix: Prefix of any name attribute to lookup
+        :type prefix: str
+        :return: List of short persons' details (which are namedtuples with fields id and full_name)
+        :rtype: <list (fast_lookup.FastLookupValue)>
+        """
+        result = fast_trie_lookup.get_persons_by_prefix(prefix)
+        # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
+        # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
+        # duplicates.
+        merged = {}
+        for d in result:
+            merged.update(d)
+        # Create a list of namedtuples <FastLookupValue> from merged result
+        return list(map(lambda kv: FastLookupValue(*kv), merged.items()))
