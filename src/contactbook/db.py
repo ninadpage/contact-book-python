@@ -505,41 +505,6 @@ class ContactBookDB(object):
         :type name: str
         :return: List of short persons' details (which are namedtuples with fields id and full_name)
         :rtype: <list (fast_lookup.FastLookupValue)>
-
-
-        if not name:
-            all_results = fast_trie_lookup.get_persons_by_prefix('')
-            # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
-            # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
-            # duplicates.
-            merged = {}
-            for d in all_results:
-                merged.update(d)
-            result = merged
-        else:
-            merged_results = []
-            for word in name.split():
-                all_results = fast_trie_lookup.get_persons_by_prefix(word)
-                # result is a list of dicts, will possible duplicates as there may be multiple paths to a single
-                # person (e.g. via common prefix of first name & last name). We need to merge all results to remove
-                # duplicates.
-                merged = {}
-                for d in all_results:
-                    merged.update(d)
-                merged_results.append(merged)
-
-            # Since we only want results which match with all words in name, we need to take intersection
-            # of merged_results
-            keys_list = list(map(lambda d: d.keys(), merged_results))
-            intersection_keys = set.intersection(*keys_list)
-            result = {}
-            for d in merged_results:
-                result.update({x: d[x] for x in d if x in intersection_keys})
-
-        # Create a list of namedtuples <FastLookupValue> from final result
-        return list(map(lambda kv: FastLookupValue(*kv), result.items()))
-
-
         """
         if not name or len(name.split()) == 1:
             return cls._find_person_details_by_prefix(name)
